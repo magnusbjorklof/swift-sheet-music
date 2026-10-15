@@ -3,6 +3,16 @@ import Foundation
 import SheetMusicAudioCore
 
 extension PlaybackEngine {
+    /// Live playback ambience shared by Apple and injected synth backends.
+    /// Zero is dry; 100 is fully wet. Does not change exported audio.
+    /// The node stays connected so slider updates do not rebuild the graph.
+    public func setPlaybackReverbMix(_ percent: Float) {
+        let mix = percent.isFinite ? min(100, max(0, percent)) : 0
+        playbackReverbMix = mix
+        playbackReverb.wetDryMix = mix
+        playbackReverb.bypass = mix == 0
+    }
+
     /// Set the master output gain — a linear amplitude multiplier
     /// applied to the full mix after per-channel mixing. `1.0` is unity
     /// (bit-for-bit unchanged). Negative values are clamped to zero;
@@ -33,7 +43,7 @@ extension PlaybackEngine {
         softClip.bypass = stage != .softClip
     }
 
-    /// Attach the master output stage and wire it once: `scoreGainMixer → sumMixer → softClip → mainMixerNode`.
+    /// Attach the master output stage and wire it once: `scoreGainMixer → sumMixer → playbackReverb → softClip → mainMixerNode`.
     /// The score synth is connected to `scoreGainMixer` in `prepareSynth`; the metronome sampler connects to the same
     /// node from `MetronomeController`, so the click is scaled by the master gain too. Called from `init`, so the
     /// chain — and therefore `masterGain` and `masterOutputStage` — outlives every `prepare(score:)`.
@@ -44,8 +54,12 @@ extension PlaybackEngine {
         engine.attach(scoreGainMixer)
         engine.attach(sumMixer)
         engine.attach(softClip)
+        engine.attach(playbackReverb)
+        playbackReverb.loadFactoryPreset(.mediumHall)
+        setPlaybackReverbMix(playbackReverbMix)
         engine.connect(scoreGainMixer, to: sumMixer, format: nil)
-        engine.connect(sumMixer, to: softClip, format: nil)
+        engine.connect(sumMixer, to: playbackReverb, format: nil)
+        engine.connect(playbackReverb, to: softClip, format: nil)
         engine.connect(softClip, to: engine.mainMixerNode, format: nil)
         scoreGainMixer.outputVolume = masterGain
         setMasterOutputStage(masterOutputStage)

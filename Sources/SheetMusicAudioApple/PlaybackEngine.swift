@@ -109,13 +109,15 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
     private var loadedChannelLayout: PlaybackChannelLayout?
 
     /// Master output stage. The score synth and the metronome both feed `scoreGainMixer`, whose `outputVolume` is
-    /// the user's master gain (`0...`). Its output passes through `sumMixer`, then `softClip` — bypassed unless
+    /// the user's master gain (`0...`). Its output passes through `sumMixer`, optional `playbackReverb`, then `softClip` — bypassed unless
     /// `masterOutputStage` selects it — then routed into `mainMixerNode`. `sumMixer` no longer sums anything the gain
     /// stage didn't already; it stays as the metering tap point (see `+Metering`), which must read the post-gain mix.
     /// Built once in `init` and reused across every `prepare(score:)`, so `masterGain` survives score reloads.
     /// `internal` so the `+Master` / `+Export` extensions in sibling files can reach the nodes directly.
     let scoreGainMixer = AVAudioMixerNode()
     let sumMixer = AVAudioMixerNode()
+    let playbackReverb = AVAudioUnitReverb()
+    public internal(set) var playbackReverbMix: Float = 0
     let softClip = SoftClipAudioUnit.makeNode()
 
     /// Which shaping node — if any — is active past full scale. Setter is
