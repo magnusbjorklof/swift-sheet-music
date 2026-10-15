@@ -595,13 +595,11 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
         }
     }
 
-    /// Re-send program-change on each staff's primary channel using
-    /// the program the mixer currently advertises. Called right after
-    /// `sequencer.start()` so the SMF's tick-0 programChange events
-    /// have already fired and our re-apply wins the race; also called
-    /// after the user changes a program from the picker while the
-    /// engine was paused, since the queued event from that picker
-    /// click can lose to the SMF on resume.
+    /// Load and select each mixer's program before starting the sequencer.
+    /// AUMIDISynth's EnablePreload mode must be off during MIDI playback:
+    /// entering it after start races the first note events. Mixer-managed
+    /// tick-zero program changes are stripped by postProcessForMIDISynth,
+    /// so there is no sequencer program change to override this selection.
     func reapplyMixerPrograms() {
         if let backend {
             for channel in mixerChannels {
@@ -916,14 +914,8 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
         if !engine.isRunning {
             try engine.start()
         }
-        // Select each non-drum channel's program now — *after* the graph is
-        // running, so the program-change MIDI events actually reach the synth.
-        // Selection otherwise only happens in `reapplyMixerPrograms()` right
-        // after `sequencer.start()` (the first `play()`), so a tap-preview
-        // fired before any playback would sound on the SF2 seed preset
-        // (GM program 0 = piano). Real playback re-applies programs after
-        // `sequencer.start()` to win the race against the SMF's tick-0
-        // program-change events, so playback behavior is unchanged.
+        // Select programs while the graph runs but before MIDI playback, so
+        // tap previews also use the authored instruments on the first opening.
         reapplyMixerPrograms()
     }
 
@@ -1557,6 +1549,7 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
                 didRebuildNormal = true
             }
             guard let sequencer else { return }
+            sequencer.stop()
             // Resume the audio graph if a previous `pause()` paused it.
             // `AVAudioEngine.start()` is the documented resume path after
             // `pause()`; safe no-op if already running.
@@ -1582,6 +1575,12 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
                     timeline: timeline, sequencer: sequencer,
                 )
             }
+            // Discard voices and pending events from the previous render cycle.
+            // A paused AU can otherwise deliver its old All Sound Off after the
+            // new opening note-on, silencing that first note on a quick replay.
+            for unit in attachedSynths {
+                AudioUnitReset(unit.audioUnit, kAudioUnitScope_Global, 0)
+            }
             // Re-assert pitch-bend sensitivity NOW that the engine is
             // running, the sequencer is loaded, and tracks are routed
             // to the shared synth — but BEFORE the sequencer fires its
@@ -1598,15 +1597,13 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
                     )
                 }
             }
-            try sequencer.start()
-            // The SMF's tick-0 events fire on every start / seek-to-0
-            // and override anything the mixer set previously. Re-apply
-            // program selection + volume / mute / solo here so user
-            // mixer choices survive replays and also pause→change→play
-            // sequences (where the picker fires while the render thread
-            // isn't running).
+            // Preset loading and mixer state must land before any note-on.
+            // In particular, reapplyMixerPrograms enters AUMIDISynth's preload
+            // mode, which Apple only permits before MIDI playback starts.
+            // Tick-zero program / volume events for these channels are stripped.
             reapplyMixerPrograms()
             applyMixerState()
+            try sequencer.start()
             state = .playing
             startCursorTimer()
         } catch {
@@ -2709,7 +2706,6 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
         // flowing. start() on an already-running sequencer is a
         // no-op, but Apple's setter halts before the assignment
         // returns, so we must always re-start here.
-        try? sequencer.start()
         // Re-assert the mixer's program / volume / mute / solo for this
         // loop iteration. Both the tick-0 programChange and CC 7 on
         // mixer-managed channels are stripped from the SMF in
@@ -2722,6 +2718,7 @@ public final class PlaybackEngine { // swiftlint:disable:this type_body_length
         // solo.
         reapplyMixerPrograms()
         applyMixerState()
+        try? sequencer.start()
         if let frame = timeline.frame(atTick: loop.startTick) {
             currentCursor = frame.cursor
         }
